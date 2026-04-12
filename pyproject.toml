@@ -33,6 +33,22 @@ module-root = ""
 package = true
 python-preference = "managed"
 
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu126", marker = "platform_system == 'Linux' and platform_machine == 'x86_64'" },
+]
+
+[[tool.uv.index]]
+name = "pypi-cn"
+url = "https://mirrors.ustc.edu.cn/pypi/simple"
+default = true
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://mirrors.aliyun.com/pytorch-wheels/cu126/"
+format = "flat"
+explicit = true
+
 [tool.pytest.ini_options]
 log_cli = true
 log_cli_level = "WARNING"

@@ -3,6 +3,16 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+guide/
+
+pyproject.toml
+uv.lock
+#data
+*.txt
+
+# weight
+*.pth
+
 # C extensions
 *.so
 
