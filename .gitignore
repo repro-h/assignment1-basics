@@ -2,8 +2,11 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.md
 
 guide/
+data/
+reference/
 
 pyproject.toml
 uv.lock
