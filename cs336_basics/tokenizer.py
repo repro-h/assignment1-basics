@@ -11,12 +11,12 @@ class BPETokenizer:
 
         self.merges = {pair: i for i, pair in enumerate(merges)}
 
-        self.special_tokens = special_tokens or None
+        self.special_tokens = special_tokens or []
 
         if self.special_tokens:
             sorted_special = sorted(self.special_tokens, key=len, reverse=True)
 
-            special_pattern = "|".join(re.compile(t) for t in sorted_special)
+            special_pattern = "|".join(re.escape(t) for t in sorted_special)
 
             self.special_regex = re.compile(special_pattern)
         else:
@@ -99,7 +99,7 @@ class BPETokenizer:
         for chunk in iterable:
             yield from self.encode(chunk)
     
-    def decode(self, ids: list[int]) -> list[str]:
+    def decode(self, ids: list[int]) -> str:
         byte_segments = [self.id_to_byte[i] for i in ids]
 
         full_bytes = b"".join(byte_segments) 
