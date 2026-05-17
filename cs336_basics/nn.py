@@ -70,3 +70,29 @@ class RMSNorm(nn.Module):
         result = (x_float / rms) * self.weight
 
         return result.to(in_dtype)
+
+"""
+门控FFN
+"""
+def silu_fn(in_features: torch.Tensor) -> torch.Tensor:
+
+    return in_features * torch.sigmoid(in_features)
+
+class SwiGLU(nn.Module):
+    def __init__(self, d_model: int, d_ff: int, device=None, dtype=None):
+        super().__init__()
+
+        self.up_proj = Linear(d_model, d_ff, device=device, dtype=dtype)
+        self.gate_proj = Linear(d_model, d_ff, device=device, dtype=dtype)
+        self.down_proj = Linear(d_ff, d_model, device=device, dtype=dtype)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+
+        up_gate_features = self.gate_proj(x)
+        gate = silu_fn(up_gate_features)
+
+        signal = self.up_proj(x)
+
+        out_features = self.down_proj(gate * signal)
+
+        return out_features
