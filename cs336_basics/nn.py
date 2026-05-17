@@ -96,3 +96,18 @@ class SwiGLU(nn.Module):
         out_features = self.down_proj(gate * signal)
 
         return out_features
+
+
+"""softmax"""
+
+def softmax(x: torch.Tensor, dim: int = -1) -> torch.Tensor:
+
+    x_max = torch.max(x, dim=dim, keepdim=True).values
+
+    x_stable = x - x_max
+
+    x_exp = torch.exp(x_stable)
+
+    exp_sum = torch.sum(x_exp, dim=dim, keepdim=True)
+
+    return x_exp / exp_sum
