@@ -16,7 +16,7 @@ class Linear(nn.Module):
         factory_kwargs = {"device": device, "dtype":dtype}
 
         # 创建权重weight
-        self.weight = nn.parameter(torch.empty((in_features, out_features), **factory_kwargs))
+        self.weight = nn.Parameter(torch.empty((out_features, in_features), **factory_kwargs))
 
         # 初始化权重
         # xavier
@@ -51,8 +51,10 @@ class Embedding(nn.Module):
 归一化层
 """
 class RMSNorm(nn.Module):
-    def __init__(self, d_model: int, embedding_dims: int, eps: float = 1e-5, device=None, dtype=None):
+    def __init__(self, d_model: int, eps: float = 1e-5, device=None, dtype=None):
         
+        super().__init__()
+
         factory_kwargs = {"device": device, "dtype": dtype}
 
         self.weight = nn.Parameter(torch.ones(d_model, **factory_kwargs))
@@ -111,3 +113,60 @@ def softmax(x: torch.Tensor, dim: int = -1) -> torch.Tensor:
     exp_sum = torch.sum(x_exp, dim=dim, keepdim=True)
 
     return x_exp / exp_sum
+
+"""scaled_dot"""
+def scaled_dot_product_attention(
+        Q: torch.Tensor,
+        K: torch.Tensor,
+        V: torch.Tensor,
+        mask: torch.Tensor = None
+) -> torch.Tensor:
+    dk = Q.size(-1)
+
+    scores = torch.einsum('...nk, ...mk -> ...nm', Q, K) / math.sqrt(dk)
+
+    if mask is not None:
+        scores = scores.masked_fill(mask == False, float('-inf'))
+    
+    probs = softmax(scores, dim=-1)
+
+    output = torch.einsum('...nm, ...mk -> ...nk', probs, V)
+
+    return output
+
+class RotaryPositionalEmbedding(nn.Module):
+    
+    def __init__(self, theta: float, dk: int, context_length: int, device=None):
+
+        super().__init__()
+        powers = torch.arange(0, dk, 2, device=device).float() / dk
+
+        freqs = 1.0 / (theta ** powers)
+
+        t = torch.arange(0, context_length, device=device)
+
+        freqs_matrix = torch.outer(t, freqs)
+
+        self.register_buffer("cos_cached", freqs_matrix.cos(), persistent=False)
+        self.register_buffer("sin_cached", freqs_matrix.sin(), persistent=False)
+
+    def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
+
+        cos = self.cos_cached[token_positions]
+        sin = self.sin_cached[token_positions]
+
+        cos = cos.to(x.dtype)
+        sin = sin.to(x.dtype)
+
+        if x.ndim > cos.ndim and cos.ndim >= 3:
+            cos = cos.unsqueeze(1)
+            sin = sin.unsqueeze(1)
+        
+        x_even = x[..., 0::2]
+        x_odd = x[..., 1::2]
+
+        output = torch.empty_like(x)
+        output[..., 0::2] = x_even * cos - x_odd * sin
+        output[..., 1::2] = x_even * sin + x_odd * cos
+
+        return output
