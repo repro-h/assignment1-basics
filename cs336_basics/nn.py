@@ -170,3 +170,194 @@ class RotaryPositionalEmbedding(nn.Module):
         output[..., 1::2] = x_even * sin + x_odd * cos
 
         return output
+    
+"""
+前向selfattention
+"""
+
+class CausalSelfAttention(nn.Module):
+    
+    def __init__(self, d_model: int, head_nums: int, context_length: int, 
+                 theta: float, bias: int, 
+                 device=None, dtype=None):
+        assert d_model % head_nums == 0 , "d_model 必须能被 head_nums 整除"
+
+        super().__init__()
+
+        self.head_nums = head_nums
+        self.d_model = d_model
+        self.dk = d_model // head_nums
+
+        self.q_proj = Linear(d_model, d_model, device=device, dtype=dtype)
+        self.k_proj = Linear(d_model, d_model, device=device, dtype=dtype)
+        self.v_proj = Linear(d_model, d_model, device=device, dtype=dtype)
+
+        self.out_porj = Linear(d_model, d_model, device=device, dtype=dtype)
+
+        if theta is not None and context_length is not None:
+            self.rope = RotaryPositionalEmbedding(theta, self.dk, context_length, device=device)
+        else:
+            self.rope = None
+        
+    def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
+
+        q = rearrange(self.q_proj(x), '... s (h d) -> ... h s d', h=self.head_nums)
+        k = rearrange(self.k_proj(x), '... s (h d) -> ... h s d', h=self.head_nums)
+        v = rearrange(self.v_proj(x), '... s (h d) -> ... h s d', h=self.head_nums)
+
+        s = x.shape[-2]
+        if self.rope is not None:
+            if token_positions is None:
+                
+                batch_dims = x.shape[:-2]
+                token_positions = torch.arange(s, device=x.device).expand(*batch_dims, s)
+            
+            q = self.rope(q, token_positions)
+            k = self.rope(k, token_positions)
+        
+        mask = torch.tril(torch.ones(s, s, device=x.device, dtype=torch.bool))
+
+        atten_out = scaled_dot_product_attention(q, k, v, mask=mask)
+
+        atten_out = rearrange(atten_out, '... h s d -> ... s (h d)')
+        output = self.out_porj(atten_out)
+
+        return output
+
+class TransformerBlock(nn.Module):
+    def __init__(self, d_model: int, context_length: int, head_nums: int, d_ff: int,
+                 theta: float,
+                 use_rsm: bool, norm_mode: str = "pre", ffn_mode: str = "swiglu", 
+                 device=None, dtype=None):
+        super().__init__()        
+        self.use_rms = use_rsm
+        self.norm_mode = norm_mode
+        self.ffn_mode = ffn_mode
+
+        self.atten = CausalSelfAttention(d_model=d_model, head_nums=head_nums, context_length=context_length, 
+                                         theta=theta, device=device, dtype=dtype)
+
+        if use_rsm:
+            self.ln1 = RMSNorm(d_model, device=device, dtype=dtype)
+            self.ln2 = RMSNorm(d_model, device=device, dtype=dtype)
+        else:
+            self.ln1 = nn.Identity()
+            self.ln2 = nn.Identity()
+        
+        if self.ffn_mode == "swiglu":
+            self.ffn = SwiGLU(d_model, d_ff, device=device, dtype=dtype)
+        elif self.ffn_mode == "silu":
+            d_ff = 4 * d_model
+            self.ffn = nn.Sequential(
+                Linear(d_model, d_ff, device, dtype),
+                nn.SiLU(),
+                Linear(d_ff, d_model, device, dtype)
+            )
+        else: 
+            raise ValueError(f"Unknow ffn type: {ffn_mode}")
+    
+    def forward(self, x: torch.Tensor, token_positions: torch.Tensor = None) -> torch.Tensor:
+        
+        if self.norm_mode == "pre":
+            x = x + self.atten(self.ln1(x), token_positions=token_positions)
+            x = x + self.ffn(self.ln2(x))
+        elif self.norm_mode == "post":
+            x = self.ln1(x + self.atten(x, token_positions=token_positions))
+            x = self.ln2(x + self.ffn(x))
+        
+        return x
+
+class TransformerLM(nn.Module):
+    def __init__(self, vocab_size: int, context_length: int, d_model: int,
+                 d_ff: int, rope_theta: int, head_nums: int, layer_nums: int,
+                 use_rms: bool = True,
+                 norm_mode: str = "pre", ffn_mode: str = "swiglu",
+                 device=None, dtype=None):
+        super().__init__()
+
+        self.layers_num = layer_nums
+        self.context_length = context_length
+
+        self.emb = Embedding(vocab_size, d_model, device=device, dtype=dtype)
+
+        self.layers = nn.ModuleList([
+            TransformerBlock(d_model, context_length, head_nums, d_ff, 
+                             rope_theta, use_rms, norm_mode, ffn_mode,
+                             device=device, dtype=dtype)
+                             for _ in range(layer_nums)
+        ])
+
+        if use_rms:
+            self.final_ln = RMSNorm(d_model, device=device, dtype=dtype)
+        else:
+            self.final_ln = nn.Identity()
+
+        self.lm_head = Linear(d_model, vocab_size, device=device, dtype=dtype)
+
+    def forward(self, token_ids: torch.tensor) -> torch.Tensor:
+        b, s = token_ids.shape
+
+        token_positions = torch.arange(s, device=token_ids.device).unsqueeze(0).expand(b, s)
+
+        x = self.emb(token_ids)
+
+        for layer in self.layers:
+            x = layer(x, token_positions=token_positions)
+        
+        x = self.final_ln(x)
+
+        return self.lm_head(x)
+    
+    def _top_p_filter(self, logits: torch.Tensor, p: float) -> torch.Tensor:
+
+        sorted_logits, sorted_indecies = torch.sort(logits, dim=-1, descending=True)
+
+        accum_probs = torch.cumsum(softmax(sorted_logits, dim=-1), dim=-1)
+
+        sorted_remove = accum_probs > p
+
+        sorted_remove[..., 1:] = sorted_remove[..., :-1].clone()
+        sorted_remove[..., 0] = False
+
+        indecies_to_remove = torch.zeros_like(logits, torch.bool)
+        indecies_to_remove = indecies_to_remove.scatter(1, sorted_indecies, sorted_remove)
+
+        logits = logits.masked_fill(indecies_to_remove, float('-inf'))
+
+        return logits
+
+    @torch.no_grad()
+    def generate(
+        self, 
+        prompt_ids: torch.Tensor,
+        max_token_length: int,
+        temperature: float,
+        p: float,
+        eos: int
+    ):
+        self.eval()
+
+        generated = prompt_ids.clone()
+
+        for _ in range(max_token_length):
+            input_ = generated[..., -self.context_length:]
+
+            logits = self.forward(input_)
+
+            logits = logits[:, -1, :]
+
+            if temperature != 1.0:
+                logits = logits / (temperature + 1e-8)
+            
+            if p < 1.0:
+                logits = self._top_p_filter(logits, p)
+
+            probs = softmax(logits, dim=-1)
+            new_token = torch.multinomial(probs, num_samples=1)
+
+            generated = torch.cat((generated, new_token), dim=1)
+
+            if eos is not None and (new_token == eos).all():
+                break
+        
+        return generated

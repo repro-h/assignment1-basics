@@ -8,6 +8,7 @@ guide/
 data/
 reference/
 ref
+exercise/
 
 pyproject.toml
 uv.lock

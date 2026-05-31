@@ -12,6 +12,10 @@ from torch import Tensor
 #测试
 from cs336_basics.trainbpe import train_bpe
 from cs336_basics.tokenizer import BPETokenizer
+from cs336_basics.nn import Linear
+from cs336_basics.nn import Embedding, SwiGLU
+
+from cs336_basics.losses import cross_entropy
 
 def run_linear(
     d_in: int,
@@ -31,8 +35,11 @@ def run_linear(
     Returns:
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
+    layer = Linear(d_in, d_out)
+    layer.weight.data = weights
 
-    raise NotImplementedError
+    # raise NotImplementedError
+    return layer(in_features)
 
 
 def run_embedding(
@@ -53,8 +60,12 @@ def run_embedding(
     Returns:
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
+    emb = Embedding(vocab_size, d_model)
+    emb.weight.data = weights
 
-    raise NotImplementedError
+    return emb(token_ids)
+
+    # raise NotImplementedError
 
 
 def run_swiglu(
@@ -83,10 +94,15 @@ def run_swiglu(
     # If your state dict keys match, you can use `load_state_dict()`
     # swiglu.load_state_dict(weights)
     # You can also manually assign the weights
+    swiglu = SwiGLU(d_model, d_ff, device=in_features.device, dtype=in_features.dtype)
+    swiglu.gate_proj.weight.data = w1_weight
+    swiglu.down_proj.weight.data = w2_weight
+    swiglu.up_proj.weight.data = w3_weight
     # swiglu.w1.weight.data = w1_weight
     # swiglu.w2.weight.data = w2_weight
     # swiglu.w3.weight.data = w3_weight
-    raise NotImplementedError
+    # raise NotImplementedError
+    return swiglu(in_features)
 
 
 def run_scaled_dot_product_attention(
@@ -452,7 +468,8 @@ def run_cross_entropy(
     Returns:
         Float[Tensor, ""]: The average cross-entropy loss across examples.
     """
-    raise NotImplementedError
+    # raise NotImplementedError
+    return cross_entropy(inputs, targets)
 
 
 def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> None:
